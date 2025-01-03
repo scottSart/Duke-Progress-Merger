@@ -1,0 +1,71 @@
+use "C:\Users\Sarth\OneDrive\Merger Analysis of Duke Energy and Progress Energy\New Analysis_STATE Variable_2024-09-23\IOU Analysis Dataset\Refresh_Both States_IOU_2024-11-08.dta", clear
+
+// Defining entity variables
+gen dash = "_"
+egen state_N_combo = concat(name_normal_new dash State)
+
+drop if (state_N_combo == "_")
+
+encode state_N_combo, gen(company_code)
+
+xtset  company_code Year
+
+// Defining fuel total spend variables
+
+gen act_coal_cost = 0.001
+gen act_fuel_cost = 0.001
+gen act_gas_cost = 0.001
+gen act_nuke_cost = 0.001
+
+replace act_coal_cost = ImpCost_Coal_MBTU * Coal_use/1000000000
+replace act_fuel_cost = ImpCost_FuelOil_MBTU * Fuel_use/1000000000
+replace act_gas_cost = ImpCost_NaturalGas_MBTU * Gas_use/1000000000
+replace act_nuke_cost =  ImpCost_Nuclear_MBTU * Nuke_use/1000000000
+
+// generating price variables (logged)
+gen log_CPKWH_res = log(Pr_res+0.0001)
+gen log_CPKWH_com = log(Pr_com+0.0001)
+gen log_CPKWH_indus = log(Pr_indus+0.0001)
+
+// defining the log of customer variables
+gen log_Cust_com = log(Cust_com+1)
+gen log_Cust_indus = log(Cust_indus+1)
+gen log_Cust_res = log(Cust_res+1)
+
+// defining the log of income
+gen log_pci = ln(Real_PCI)
+
+// removing variables that are not consistent and balanced
+
+bys company_code: egen occurance_res = count(Combo_Nco_State)
+
+bys occurance_res: su Year
+
+drop if (occurance_res < 14)
+bys Year: su occurance_res
+
+// Defining treatment and non-treatment variables
+gen post16 = (Year >= 2016)
+gen treatment = (Combo_Nco_State == "NC_Duke Energy Progress (Merged)") | (Combo_Nco_State == "SC_Duke Energy Progress (Merged)") 
+gen post16Xtreatment = post16*treatment
+
+
+// Dropping states that do not align with requirements 
+		// 1) Have experienced no merger
+		// 2) Are not a part of a RTO
+		// 3) Another IOU operating in the region
+drop if (IOU_merger >= 1) & (State != "NC" & State != "SC") // 1
+drop if (RTO == 1) //2
+drop if (Company=="Virginia Electric & Power Co") // 3
+
+// Running the DiD regression for IOU
+
+eststo m1 : qui xtreg log_CPKWH_res log_Cust_res log_kwh_res shore_weather_risk post16 treatment post16Xtreatment act_coal_cost act_fuel_cost act_gas_cost if Combo_Nco_State != "SC_Duke Energy Progress (Merged)", vce(cluster Combo_Nco_State)
+eststo m2 : qui xtreg log_CPKWH_com log_Cust_com log_kwh_com shore_weather_risk post16 treatment post16Xtreatment act_coal_cost act_fuel_cost act_gas_cost if Combo_Nco_State != "SC_Duke Energy Progress (Merged)", vce(cluster Combo_Nco_State)
+eststo m3 : qui xtreg log_CPKWH_indus log_Cust_indus log_kwh_indus shore_weather_risk post16 treatment post16Xtreatment act_coal_cost act_fuel_cost act_gas_cost if Combo_Nco_State != "SC_Duke Energy Progress (Merged)", vce(cluster Combo_Nco_State)
+eststo m4 : qui xtreg log_CPKWH_res log_Cust_res log_kwh_res shore_weather_risk post16 treatment post16Xtreatment act_coal_cost act_fuel_cost act_gas_cost if Combo_Nco_State != "NC_Duke Energy Progress (Merged)", vce(cluster Combo_Nco_State)
+eststo m5 : qui xtreg log_CPKWH_com log_Cust_com log_kwh_com shore_weather_risk post16 treatment post16Xtreatment act_coal_cost act_fuel_cost act_gas_cost if Combo_Nco_State != "NC_Duke Energy Progress (Merged)", vce(cluster Combo_Nco_State)
+eststo m6 : qui xtreg log_CPKWH_indus log_Cust_indus log_kwh_indus shore_weather_risk post16 treatment post16Xtreatment act_coal_cost act_fuel_cost act_gas_cost if Combo_Nco_State != "NC_Duke Energy Progress (Merged)", vce(cluster Combo_Nco_State)
+
+esttab m1 m2 m3 m4 m5 m6 //using "DID_on_IOU.txt", se ar2 label stats(r2 N, fmt(3)) title("Difference in Difference analysis on IOU-level variables") compress replace
+
